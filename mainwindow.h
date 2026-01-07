@@ -57,6 +57,7 @@ protected:
 
 private slots:
     void onSimulateMatch();
+    void onSimulateToDate();
     void onViewSquad();
     void onStartGame(); 
     void updateMatchAnim(); 
@@ -147,6 +148,12 @@ private:
     
     // Helper logique
     bool isMercatoOpen(); // <--- NOUVEAU : Vérifie les dates
+    void simulerSemaineRapide(); 
+
+    int numSaison = 1;         // Compteur de saison
+    const int MAX_SAISONS = 5; // Limite de la carrière
+
+    void passerSaisonSuivante(); // Fonction principale de transition
 };
 
 #endif // MAINWINDOW_H

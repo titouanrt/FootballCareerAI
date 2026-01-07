@@ -27,20 +27,36 @@ std::string player::toString() const { return nom + " (" + poste + ") - " + std:
 bool player::operator<(const player& other) const { return level > other.level; } 
 
 double player::calculate_value(float team_avg_score) const {
+    // Formule de base exponentielle selon le niveau (Rating)
     double base_value = 350000.0 * std::pow(1.19, level - 60); 
     if (base_value < 50000) base_value = 50000; 
 
-    double age_factor = 1.0;
-    if (age < 21) age_factor = 1.5; 
-    else if (age > 32) age_factor = 0.6; 
+    // --- MODIFICATION AGE (LINÉAIRE) ---
+    // "Plus ils sont jeunes, plus ils sont chers"
+    // Modèle linéaire centré autour de 26 ans (Peak théorique décalé vers la jeunesse pour le potentiel)
+    // Age 16 : Facteur ~1.40 (+40%)
+    // Age 26 : Facteur 1.00 (Standard)
+    // Age 35 : Facteur ~0.64 (-36%)
+    double age_factor = 1.1 + (28.0 - (double)age) * 0.08;
+    
+    // Bornes de sécurité pour éviter des valeurs négatives ou absurdes
+    if (age_factor < 0.3) age_factor = 0.3; // Minimum pour les vieux vétérans
+    //if (age_factor > 4) age_factor = 4; // Maximum pour les très jeunes prodiges
 
+    // --- MODIFICATION POSITION (IMPACT RÉDUIT) ---
     double pos_factor = 1.0;
-    if (poste == "GK") pos_factor = 0.70; 
-    else if (poste == "CB" || poste == "LB" || poste == "RB") pos_factor = 0.85; 
-    else if (poste == "ST" || poste == "CF" || poste == "LW" || poste == "RW") pos_factor = 1.40; 
+    if (poste == "GK") pos_factor = 0.85;  // Était 0.70
+    else if (poste == "CB" || poste == "LB" || poste == "RB" || poste == "LWB" || poste == "RWB") pos_factor = 0.90; // Était 0.85
+    else if (poste == "CDM" || poste == "CM" || poste == "CAM") pos_factor = 1.00; // Standard
+    else if (poste == "ST" || poste == "CF" || poste == "LW" || poste == "RW" || poste == "RM" || poste == "LM") pos_factor = 1.20; // Était 1.40
 
+    // Facteurs mineurs inchangés
     double club_factor = 1.0 + ((team_avg_score - 72.0) * 0.03); 
     double fluctuation = 0.95 + ((id % 11) / 100.0); 
 
     return base_value * age_factor * pos_factor * club_factor * fluctuation;
+}
+
+void player::vieillir() { 
+    age++; 
 }

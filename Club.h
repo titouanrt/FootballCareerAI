@@ -5,6 +5,7 @@
 #include <vector>
 #include "Player.h"
 
+// Structure nécessaire pour la tactique
 struct SquadFormation {
     player gk;
     std::vector<player> defs; 
@@ -39,6 +40,10 @@ public:
 
     void set_stats(int p, int g, int n, int l, int b_p, int b_c);
     void update_score();
+
+    // --- C'EST CETTE LIGNE QUI MANQUAIT ---
+    std::vector<std::string> gestion_fin_saison(); 
+    // --------------------------------------
 
 private:
     std::string nom;
