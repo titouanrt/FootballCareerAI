@@ -1238,7 +1238,6 @@ void MainWindow::showEvent(QShowEvent *event)
     }
 }
 
-
 void MainWindow::onSimulateToDate() {
     if(!maSaison) return;
 
@@ -1249,7 +1248,7 @@ void MainWindow::onSimulateToDate() {
 
     QLabel *label = new QLabel("Choisissez la date cible :");
     QCalendarWidget *calendar = new QCalendarWidget();
-    calendar->setMinimumDate(currentDate.addDays(7)); // On ne peut pas remonter le temps
+    calendar->setMinimumDate(currentDate.addDays(7)); 
     calendar->setMaximumDate(currentDate.addYears(1));
     calendar->setSelectedDate(currentDate.addDays(7));
 
@@ -1261,31 +1260,39 @@ void MainWindow::onSimulateToDate() {
     layout->addWidget(calendar);
     layout->addWidget(buttons);
 
-    // 2. Si l'utilisateur valide
-    if (dialog.exec() == QDialog::Accepted) {
+   if (dialog.exec() == QDialog::Accepted) {
         QDate targetDate = calendar->selectedDate();
         
-        // Barre de chargement pour faire patienter
         QProgressDialog progress("Simulation en cours...", "Annuler", 0, 100, this);
         progress.setWindowModality(Qt::WindowModal);
         progress.show();
 
         int weeks = 0;
-        // On boucle tant qu'on n'a pas atteint la date ET que la saison n'est pas finie
-        while (currentDate < targetDate && jourActuel < maSaison->getnbjour()) {
-            simulerSemaineRapide(); // Calcul sans animation
+
+        // On boucle tant qu'on n'a pas atteint la date.
+        // On enlève la condition sur "jourActuel" ici pour permettre de passer la saison
+        // et continuer la simulation dans la foulée.
+        while (currentDate < targetDate) {
+            
+            // Sécurité : Si on est en fin de saison, on passe à la suivante
+            if (jourActuel >= maSaison->getnbjour()) {
+                passerSaisonSuivante();
+                // Si on a fini le jeu (5 saisons), on arrête
+                if (numSaison > MAX_SAISONS) break;
+            }
+
+            simulerSemaineRapide(); 
             
             weeks++;
-            progress.setValue(weeks % 100); // Juste pour bouger la barre
-            QCoreApplication::processEvents(); // Garde l'interface réactive
+            progress.setValue(weeks % 100); 
+            QCoreApplication::processEvents(); 
             
             if (progress.wasCanceled()) break;
         }
 
-        // 3. Rafraîchissement final
         refreshDashboard();
         updateClassement();
-        if(tabRight->currentIndex() == 3) updateMarketTable(); // Si on est sur l'onglet mercato
+        if(tabRight->currentIndex() == 3) updateMarketTable(); 
         
         QMessageBox::information(this, "Simulation terminée", 
             QString("Simulation terminée !\n%1 semaines simulées.").arg(weeks));
@@ -1355,16 +1362,12 @@ void MainWindow::passerSaisonSuivante() {
     QString resumeRetraites = "";
     int totalRetraites = 0;
 
-    // 1. Gestion des retraites pour TOUS les championnats
-    // On parcourt la map des championnats
+    // 1. Gestion des retraites
     for (auto& [nomChamp, champObj] : map_champ) {
         std::vector<club>* clubs = champObj.getliste();
         if(clubs) {
             for(auto& c : *clubs) {
-                // On applique le vieillissement et les retraites
                 std::vector<std::string> departs = c.gestion_fin_saison();
-                
-                // On note quelques noms pour le log (ceux de notre club ou ligue)
                 if (&c == monClub || champObj.getnom() == currentChamp->getnom()) {
                     for(const auto& nom : departs) {
                         resumeRetraites += QString::fromStdString(nom) + " (" + QString::fromStdString(c.getnom()) + ")\n";
@@ -1379,26 +1382,32 @@ void MainWindow::passerSaisonSuivante() {
     numSaison++;
     jourActuel = 0;
     
-    // On avance d'un an (exemple : on repart au 8 Août de l'année suivante)
-    currentDate = QDate(currentDate.year() + 1, 8, 8);
+    // --- CORRECTION DU SAUT DE DATE ---
+    // Si on est en début d'année (Jan-Juin), la nouvelle saison commence en Août de CETTE année.
+    // Si on est en fin d'année (Juillet-Déc), la nouvelle saison commence en Août de l'année SUIVANTE.
+    int nextSeasonYear = currentDate.year();
+    if (currentDate.month() >= 7) nextSeasonYear++; 
+    
+    currentDate = QDate(nextSeasonYear, 8, 8);
+    // ----------------------------------
 
-    // 3. Réinitialisation de la saison (Génération du nouveau calendrier)
+    // 3. Réinitialisation de la saison
     if(maSaison) delete maSaison;
     maSaison = new saison(*currentChamp);
     
-    // Mise à jour du lien dans le profil
     if(profilJoueur) profilJoueur->changer_saison(*maSaison);
 
     // 4. Feedback Interface
     QMessageBox::information(this, "Nouvelle Saison", 
         QString("Fin de la saison %1 !\n\n"
-                "%2 joueurs ont pris leur retraite à travers le monde.\n"
-                "Voici quelques départs notables dans votre ligue :\n%3\n"
-                "Place à la saison %4 !")
+                "%2 joueurs ont pris leur retraite.\n"
+                "Départs notables :\n%3\n"
+                "Début de la saison %4 (Août %5) !")
                 .arg(numSaison - 1)
                 .arg(totalRetraites)
                 .arg(resumeRetraites.isEmpty() ? "Aucun" : resumeRetraites)
-                .arg(numSaison));
+                .arg(numSaison)
+                .arg(nextSeasonYear));
 
     // Reset affichage
     txtLog->clear();
@@ -1408,5 +1417,12 @@ void MainWindow::passerSaisonSuivante() {
     
     refreshDashboard();
     updateClassement();
-    onViewSquad(); // Pour voir qui est parti
+    onViewSquad(); 
 }
+
+
+
+
+
+
+
