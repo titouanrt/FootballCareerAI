@@ -1,7 +1,7 @@
 #include "Club.h"
 #include "GameUtils.h"
 #include <algorithm>
-
+#include <set>
 club::club() : nbpoint{0}, score{0} {}
 club::club(std::string le_nom) : nom{le_nom}, nbpoint{0}, score{0} {}
 
@@ -11,30 +11,101 @@ const std::vector<player>& club::getEffectif() const { return effectif; }
 
 SquadFormation club::get_best_11() {
     SquadFormation squad;
-    std::vector<player> all_gk, all_def, all_mid, all_att;
+    std::set<int> usedIds; // Pour éviter les doublons
 
-    for(const auto& p : effectif) {
-        std::string pos = p.getposte();
-        if(pos == "GK") all_gk.push_back(p);
-        else if(pos == "LB" || pos == "RB" || pos == "CB" || pos == "LWB" || pos == "RWB") all_def.push_back(p);
-        else if(pos == "CDM" || pos == "CM" || pos == "CAM" || pos == "LM" || pos == "RM") all_mid.push_back(p);
-        else all_att.push_back(p);
+    // 1. Lambda pour récupérer les joueurs disponibles triés par niveau
+    auto get_available = [&](const std::vector<std::string>& valid_pos) -> std::vector<player> {
+        std::vector<player> candidates;
+        for(const auto& p : effectif) {
+            if(usedIds.count(p.getid())) continue;
+            // Vérifie si le poste du joueur est dans la liste demandée
+            for(const auto& pos : valid_pos) {
+                if(p.getposte() == pos) {
+                    candidates.push_back(p);
+                    break;
+                }
+            }
+        }
+        std::sort(candidates.begin(), candidates.end()); // Tri décroissant (opérateur < surchargé)
+        return candidates;
+    };
+
+    // 2. Lambda pour sélectionner le meilleur d'une liste et l'ajouter
+    auto pick_best = [&](const std::vector<std::string>& positions, std::vector<player>& targetVec) -> bool {
+        std::vector<player> candidates = get_available(positions);
+        if(!candidates.empty()) {
+            player best = candidates[0];
+            targetVec.push_back(best);
+            usedIds.insert(best.getid());
+            return true;
+        }
+        return false;
+    };
+
+    // --- GARDIEN ---
+    if (!pick_best({"GK"}, squad.subs)) { 
+        // Astuce: on utilise squad.subs temporairement ou on assigne direct
+        // Ici on assigne manuellement car squad.gk est un objet unique, pas un vecteur
+        std::vector<player> gks = get_available({"GK"});
+        if(!gks.empty()) {
+            squad.gk = gks[0];
+            usedIds.insert(squad.gk.getid());
+        }
+    } else {
+        // Si pick_best a mis dans subs par erreur (car j'ai passé subs), on corrige
+        // Mieux vaut le faire manuellement pour le GK :
+        squad.subs.clear(); // Nettoyage si erreur
+        std::vector<player> gks = get_available({"GK"});
+        if(!gks.empty()) {
+            squad.gk = gks[0];
+            usedIds.insert(squad.gk.getid());
+        }
     }
 
-    std::sort(all_gk.begin(), all_gk.end());
-    std::sort(all_def.begin(), all_def.end());
-    std::sort(all_mid.begin(), all_mid.end());
-    std::sort(all_att.begin(), all_att.end());
+    // --- DÉFENSE (Ordre : LB, CB, CB, RB) ---
+    // 1. Latéral Gauche
+    if(!pick_best({"LB", "LWB"}, squad.defs)) pick_best({"RB", "RWB", "CB"}, squad.defs); // Fallback
+    
+    // 2. Défenseurs Centraux (x2)
+    for(int i=0; i<2; ++i) {
+        if(!pick_best({"CB"}, squad.defs)) pick_best({"CDM", "LB", "RB"}, squad.defs);
+    }
 
-    if(!all_gk.empty()) { squad.gk = all_gk[0]; all_gk.erase(all_gk.begin()); }
-    for(int i=0; i<4 && !all_def.empty(); ++i) { squad.defs.push_back(all_def[0]); all_def.erase(all_def.begin()); }
-    for(int i=0; i<3 && !all_mid.empty(); ++i) { squad.mids.push_back(all_mid[0]); all_mid.erase(all_mid.begin()); }
-    for(int i=0; i<3 && !all_att.empty(); ++i) { squad.atts.push_back(all_att[0]); all_att.erase(all_att.begin()); }
+    // 3. Latéral Droit
+    if(!pick_best({"RB", "RWB"}, squad.defs)) pick_best({"LB", "LWB", "CB"}, squad.defs);
 
-    squad.subs.insert(squad.subs.end(), all_gk.begin(), all_gk.end());
-    squad.subs.insert(squad.subs.end(), all_def.begin(), all_def.end());
-    squad.subs.insert(squad.subs.end(), all_mid.begin(), all_mid.end());
-    squad.subs.insert(squad.subs.end(), all_att.begin(), all_att.end());
+
+    // --- MILIEU (3 joueurs) ---
+    // On cherche d'abord des profils axiaux
+    for(int i=0; i<3; ++i) {
+        if(!pick_best({"CDM", "CM", "CAM"}, squad.mids)) {
+            // Fallback : Milieux latéraux ou ailiers reconvertis
+            pick_best({"LM", "RM", "LW", "RW"}, squad.mids);
+        }
+    }
+
+    // --- ATTAQUE (Ordre : LW, ST, RW) ---
+    // 1. Ailier Gauche
+    if(!pick_best({"LW", "LM"}, squad.atts)) pick_best({"RW", "RM", "ST", "CF"}, squad.atts);
+
+    // 2. Buteur (Centre)
+    if(!pick_best({"ST", "CF"}, squad.atts)) pick_best({"LW", "RW", "CAM"}, squad.atts);
+
+    // 3. Ailier Droit
+    if(!pick_best({"RW", "RM"}, squad.atts)) pick_best({"LW", "LM", "ST", "CF"}, squad.atts);
+
+
+    // --- REMPLAÇANTS ---
+    // On met tout le reste dans les subs
+    for(const auto& p : effectif) {
+        if(usedIds.find(p.getid()) == usedIds.end()) {
+            squad.subs.push_back(p);
+        }
+    }
+    
+    // On trie le banc par niveau pour avoir les meilleurs remplaçants en premier
+    std::sort(squad.subs.begin(), squad.subs.end());
+
     return squad;
 }
 
@@ -43,7 +114,7 @@ std::string club::get_random_buteur() {
     for(int i=0; i<5; i++) {
         int idx = random_int(0, effectif.size() - 1);
         std::string p = effectif[idx].getposte();
-        if(p == "ST" || p == "CF" || p == "LW" || p == "RW" || p == "CAM") return effectif[idx].getnom();
+        if(p == "ST" || p == "CF" || p == "LW" || p == "RW" || p == "CAM" || p == "RM" || p == "LM") return effectif[idx].getnom();
     }
     return effectif[random_int(0, effectif.size() - 1)].getnom();
 }
@@ -88,4 +159,39 @@ void club::update_score() {
     if (effectif.empty()) { score = 0; return; }
     for (int i{}; i<effectif.size(); i++) somme += effectif[i].getlevel();
     score = somme/effectif.size();
+}
+
+std::vector<std::string> club::gestion_fin_saison() {
+    std::vector<std::string> retraites;
+    
+    // On utilise un itérateur pour pouvoir supprimer des éléments en bouclant
+    for (auto it = effectif.begin(); it != effectif.end(); ) {
+        it->vieillir(); // +1 an
+        
+        bool part = false;
+        int age = it->getage();
+
+        // Logique de Retraite
+        // À partir de 33 ans, le risque augmente chaque année
+        if (age >= 33) {
+            int chance = (age - 32) * 12; 
+            // 33 ans = 12%
+            // 34 ans = 24%
+            // ...
+            // 38 ans = 72%
+            
+            if (chance > 95) chance = 95; // On garde toujours 5% de chance qu'il continue (Légende)
+            
+            if (random_int(0, 100) < chance) part = true;
+        }
+
+        if (part) {
+            retraites.push_back(it->getnom());
+            it = effectif.erase(it); // Suppression du vecteur
+        } else {
+            ++it;
+        }
+    }
+    update_score(); // Recalcule le niveau global du club après les départs
+    return retraites;
 }

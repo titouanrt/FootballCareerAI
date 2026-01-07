@@ -10,6 +10,10 @@
 #include <QScrollBar> 
 #include <QDoubleValidator> 
 #include <QLocale>
+#include <QCalendarWidget>
+#include <QDialogButtonBox>
+#include <QDialog>
+#include<QProgressDialog>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -249,6 +253,10 @@ void MainWindow::setupUI()
     btnSimuler->setStyleSheet("background-color: #e67e22; font-size: 14px; padding: 20px; margin-top: 20px; border-radius: 8px; font-weight: 900; letter-spacing: 1px;"); 
     connect(btnSimuler, &QPushButton::clicked, this, &MainWindow::onSimulateMatch);
 
+    QPushButton *btnSimulateDate = new QPushButton("📅 SIMULER JUSQU'À...");
+    btnSimulateDate->setStyleSheet("background-color: #8e44ad; font-size: 12px; padding: 10px; margin-top: 5px; border-radius: 6px; font-weight: bold;");
+    connect(btnSimulateDate, &QPushButton::clicked, this, &MainWindow::onSimulateToDate);
+
     layoutLeft->addWidget(lblInfoClub);
     layoutLeft->addWidget(lblArgent);
     layoutLeft->addWidget(frameManager);
@@ -263,6 +271,7 @@ void MainWindow::setupUI()
     layoutLeft->addWidget(btnSauvegarder);
     layoutLeft->addStretch();
     layoutLeft->addWidget(btnSimuler);
+    layoutLeft->addWidget(btnSimulateDate); 
 
     // PANNEAU DROIT (ONGLETS)
     QWidget *rightPanel = new QWidget();
@@ -784,8 +793,7 @@ void MainWindow::refreshDashboard()
         if(parts.size() >= 2) parts[1] = parts[1].at(0).toUpper() + parts[1].mid(1);
         dateStr = parts.join(" ");
     }
-    lblDate->setText(dateStr + "\n(Journée " + QString::number(jourActuel + 1) + ")");
-
+lblDate->setText(dateStr + "\nSaison " + QString::number(numSaison) + "/" + QString::number(MAX_SAISONS) + " - J" + QString::number(jourActuel + 1));
     // 2. Mise à jour statut Mercato
     if(isMercatoOpen()) {
         lblMercatoStatus->setText("🟢 MERCATO OUVERT");
@@ -831,7 +839,7 @@ void MainWindow::onViewSquad()
 void MainWindow::onSimulateMatch()
 {
     if(jourActuel >= maSaison->getnbjour()) {
-        QMessageBox::information(this, "Fin", "Saison terminée !");
+        passerSaisonSuivante();
         return;
     }
 
@@ -1228,4 +1236,177 @@ void MainWindow::showEvent(QShowEvent *event)
             if(tabRight && tabRight->currentIndex() == 1) refreshEffectif();
         });
     }
+}
+
+
+void MainWindow::onSimulateToDate() {
+    if(!maSaison) return;
+
+    // 1. Création d'une boite de dialogue avec un calendrier
+    QDialog dialog(this);
+    dialog.setWindowTitle("Simuler jusqu'à une date");
+    QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+    QLabel *label = new QLabel("Choisissez la date cible :");
+    QCalendarWidget *calendar = new QCalendarWidget();
+    calendar->setMinimumDate(currentDate.addDays(7)); // On ne peut pas remonter le temps
+    calendar->setMaximumDate(currentDate.addYears(1));
+    calendar->setSelectedDate(currentDate.addDays(7));
+
+    QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    layout->addWidget(label);
+    layout->addWidget(calendar);
+    layout->addWidget(buttons);
+
+    // 2. Si l'utilisateur valide
+    if (dialog.exec() == QDialog::Accepted) {
+        QDate targetDate = calendar->selectedDate();
+        
+        // Barre de chargement pour faire patienter
+        QProgressDialog progress("Simulation en cours...", "Annuler", 0, 100, this);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.show();
+
+        int weeks = 0;
+        // On boucle tant qu'on n'a pas atteint la date ET que la saison n'est pas finie
+        while (currentDate < targetDate && jourActuel < maSaison->getnbjour()) {
+            simulerSemaineRapide(); // Calcul sans animation
+            
+            weeks++;
+            progress.setValue(weeks % 100); // Juste pour bouger la barre
+            QCoreApplication::processEvents(); // Garde l'interface réactive
+            
+            if (progress.wasCanceled()) break;
+        }
+
+        // 3. Rafraîchissement final
+        refreshDashboard();
+        updateClassement();
+        if(tabRight->currentIndex() == 3) updateMarketTable(); // Si on est sur l'onglet mercato
+        
+        QMessageBox::information(this, "Simulation terminée", 
+            QString("Simulation terminée !\n%1 semaines simulées.").arg(weeks));
+    }
+}
+
+void MainWindow::simulerSemaineRapide() {
+    // Logique identique à onSimulateMatch mais sans l'animation visuelle
+    
+    int nb_matchs = maSaison->getnbmatch();
+    int start = jourActuel * nb_matchs;
+    std::vector<match>& matches = maSaison->getlist();
+    std::string monClubNom = (monClub ? monClub->getnom() : "");
+    
+    // Jouer tous les matchs de la journée
+    int points = 0;
+    bool played = false;
+
+    for(int i = start; i < start + nb_matchs && i < matches.size(); i++) {
+        MatchResult res = matches[i].jouer_match(); 
+        
+        // Si c'est mon match, je calcule mes gains
+        if(res.dom->getnom() == monClubNom || res.ext->getnom() == monClubNom) {
+            played = true;
+            bool iamHome = (res.dom->getnom() == monClubNom);
+            int scoreMoi = iamHome ? res.score_dom : res.score_ext;
+            int scoreAdv = iamHome ? res.score_ext : res.score_dom;
+
+            if (scoreMoi > scoreAdv) points = 3;
+            else if (scoreMoi == scoreAdv) points = 1;
+            else points = 0;
+        }
+    }
+
+    // Application des récompenses (Copie de la logique de updateMatchAnim)
+    if(played && profilJoueur && currentChamp) {
+        int tier = currentChamp->get_tier();
+        long long gain = 0;
+        int multiplier = (tier == 1) ? 10 : (tier == 2 ? 4 : 1);
+        
+        if(points == 3) gain = 50000 * multiplier;
+        else if(points == 1) gain = 15000 * multiplier;
+        else gain = 5000 * multiplier;
+
+        profilJoueur->add_argent(gain);
+        profilJoueur->update_rating(points);
+    }
+
+    if (jourActuel >= maSaison->getnbjour()) {
+        passerSaisonSuivante();
+        return;
+    }
+
+    // Avancer le temps
+    jourActuel++;
+    currentDate = currentDate.addDays(7);
+}
+
+void MainWindow::passerSaisonSuivante() {
+    if (numSaison >= MAX_SAISONS) {
+        QMessageBox::information(this, "Carrière Terminée", 
+            "Félicitations ! Vous êtes allé au bout des 5 saisons de votre contrat.\n"
+            "Merci d'avoir joué à Ultimate Football Manager Simulator 2026 !");
+        return;
+    }
+
+    QString resumeRetraites = "";
+    int totalRetraites = 0;
+
+    // 1. Gestion des retraites pour TOUS les championnats
+    // On parcourt la map des championnats
+    for (auto& [nomChamp, champObj] : map_champ) {
+        std::vector<club>* clubs = champObj.getliste();
+        if(clubs) {
+            for(auto& c : *clubs) {
+                // On applique le vieillissement et les retraites
+                std::vector<std::string> departs = c.gestion_fin_saison();
+                
+                // On note quelques noms pour le log (ceux de notre club ou ligue)
+                if (&c == monClub || champObj.getnom() == currentChamp->getnom()) {
+                    for(const auto& nom : departs) {
+                        resumeRetraites += QString::fromStdString(nom) + " (" + QString::fromStdString(c.getnom()) + ")\n";
+                    }
+                }
+                totalRetraites += departs.size();
+            }
+        }
+    }
+
+    // 2. Mise à jour des variables de temps
+    numSaison++;
+    jourActuel = 0;
+    
+    // On avance d'un an (exemple : on repart au 8 Août de l'année suivante)
+    currentDate = QDate(currentDate.year() + 1, 8, 8);
+
+    // 3. Réinitialisation de la saison (Génération du nouveau calendrier)
+    if(maSaison) delete maSaison;
+    maSaison = new saison(*currentChamp);
+    
+    // Mise à jour du lien dans le profil
+    if(profilJoueur) profilJoueur->changer_saison(*maSaison);
+
+    // 4. Feedback Interface
+    QMessageBox::information(this, "Nouvelle Saison", 
+        QString("Fin de la saison %1 !\n\n"
+                "%2 joueurs ont pris leur retraite à travers le monde.\n"
+                "Voici quelques départs notables dans votre ligue :\n%3\n"
+                "Place à la saison %4 !")
+                .arg(numSaison - 1)
+                .arg(totalRetraites)
+                .arg(resumeRetraites.isEmpty() ? "Aucun" : resumeRetraites)
+                .arg(numSaison));
+
+    // Reset affichage
+    txtLog->clear();
+    lblScoreBig->setText("0 - 0");
+    lblMatchTime->setText("0'");
+    barMatch->setValue(0);
+    
+    refreshDashboard();
+    updateClassement();
+    onViewSquad(); // Pour voir qui est parti
 }

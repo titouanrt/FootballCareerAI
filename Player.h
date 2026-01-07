@@ -28,6 +28,7 @@ public:
     bool operator<(const player& other) const;
     double calculate_value(float team_avg_score) const;
 
+    void vieillir();
 private:
     int id;
     std::string nom;
